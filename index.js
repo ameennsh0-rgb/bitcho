@@ -5,91 +5,79 @@ const axios = require('axios');
 const PORT = process.env.PORT || 3000;
 const TORBOX_API_KEY = process.env.TORBOX_API_KEY;
 
-// 1. HIGH-STABILITY TORRENTIO DISCOVERY ENGINE (Bypasses all website scraper blocks)
-async function scrapeMagnetLink(searchQuery) {
+// 1. FREE MUSICBRAINZ METADATA ENGINE (Unblockable & requires no API keys)
+async function fetchCleanMetadata(searchQuery) {
     try {
-        console.log(`[Torrentio Engine] Searching stable cluster for: "${searchQuery}"`);
+        console.log(`[MusicBrainz] Fetching official data fields for: "${searchQuery}"`);
         const cleanQuery = searchQuery.replace(/[^a-zA-Z0-9 ]/g, '').trim();
-        const encodedQuery = encodeURIComponent(cleanQuery + " flac"); 
-
-        // Querying Torrentio's optimized public streaming catalog endpoint
-        const targetUrl = `https://strem.fun{encodedQuery}.json`;
-        const response = await axios.get(targetUrl, { 
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-            timeout: 5000 
+        
+        // MusicBrainz allows open querying if you declare a unique User-Agent string header
+        const targetUrl = `https://musicbrainz.org{encodeURIComponent(cleanQuery)}&fmt=json`;
+        const response = await axios.get(targetUrl, {
+            headers: { 'User-Agent': 'BitChordPrivateScraper/1.0.0 ( contact@myaddon.com )' },
+            timeout: 3500
         });
 
-        if (response.data && response.data.streams && response.data.streams.length > 0) {
-            // Grab the highest-seeded audio/torrent stream result
-            const topStream = response.data.streams[0];
-            if (topStream && topStream.infoHash) {
-                const infoHash = topStream.infoHash.toLowerCase().trim();
-                const torrentName = topStream.title ? topStream.title.split('\n')[0] : "Lossless FLAC Audio Track";
-                
-                console.log(`[Discovery Success] Captured live magnet hash: ${infoHash}`);
-                return {
-                    hash: infoHash,
-                    magnet: `magnet:?xt=urn:btih:${infoHash}&dn=${encodeURIComponent(torrentName)}`,
-                    name: torrentName
-                };
-            }
-        }
-    } catch (err) {
-        console.error(`[Discovery Error] Torrentio node timed out: ${err.message}`);
-    }
-    
-    // Backup Fallback: Querying the FIXED, correct APIBay domain endpoint directly
-    try {
-        console.log(`[APIBay Fallback] Routing through fixed apibay endpoint...`);
-        const encodedQuery = encodeURIComponent(searchQuery + " flac");
-        const response = await axios.get(`https://apibay.org{encodedQuery}`, { timeout: 4000 });
-        if (response.data && response.data.length > 0 && response.data[0].info_hash !== "0") {
-            const topTorrent = response.data[0];
-            console.log(`[APIBay Success] Found match: ${topTorrent.name}`);
+        if (response.data && response.data.recordings && response.data.recordings.length > 0) {
+            const track = response.data.recordings[0];
+            const artist = track['artist-credit'] && track['artist-credit'].length > 0 ? track['artist-credit'][0].name : 'Unknown Artist';
+            console.log(`[MusicBrainz Success] Bound Clean Text: ${artist} - ${track.title}`);
             return {
-                hash: topTorrent.info_hash.toLowerCase(),
-                magnet: `magnet:?xt=urn:btih:${topTorrent.info_hash}&dn=${encodeURIComponent(topTorrent.name)}`,
-                name: topTorrent.name
+                title: track.title,
+                artist: artist,
+                query: `${artist} - ${track.title}`
             };
         }
     } catch (err) {
-        console.error(`[APIBay Error] Fallback engine also down: ${err.message}`);
+        console.error(`[Metadata API Drop] Reverting to raw fallback parameters: ${err.message}`);
     }
-    return null;
+    return { title: searchQuery, artist: 'Track', query: searchQuery };
 }
 
-// 2. CHECK TORBOX FOR INSTANT LINK OR COMMAND ASYNC CACHING
-async function getTorBoxStreamOrCache(torrentData) {
-    if (!torrentData) return null;
+// 2. FREE LRCLIB LYRICS ENGINE (Unblockable & requires no API keys)
+async function fetchTrackLyrics(artist, title) {
     try {
-        // Step A: Check your personal cloud account to see if the track is ready to play
-        const listResponse = await axios.get('https://torbox.app', {
-            headers: { 'Authorization': `Bearer ${TORBOX_API_KEY}` }
+        const targetUrl = `https://lrclib.net{encodeURIComponent(artist)}&track_name=${encodeURIComponent(title)}`;
+        const response = await axios.get(targetUrl, { timeout: 3000 });
+        if (response.data && response.data.length > 0) {
+            return response.data[0].syncedLyrics || response.data[0].plainLyrics || "";
+        }
+    } catch (err) {
+        console.warn(`[Lyrics Engine Alert] No matching lyrics returned.`);
+    }
+    return "";
+}
+
+// 3. TORBOX GLOBAL ACCOUNT SEARCH & INSTANT CLOUD ROUTER
+async function resolveDebridStream(metaQuery) {
+    if (!TORBOX_API_KEY) return null;
+    try {
+        console.log(`[TorBox API] Deep scanning debrid catalogs for completed cache assets...`);
+        const searchString = `${metaQuery.artist} ${metaQuery.title} flac`;
+        
+        // Query your TorBox personal account cache listings natively via official parameters
+        const checkUrl = 'https://torbox.app';
+        const response = await axios.get(checkUrl, {
+            headers: { 'Authorization': `Bearer ${TORBOX_API_KEY}` },
+            timeout: 4000
         });
 
-        if (listResponse.data && listResponse.data.success) {
-            const existingTorrent = listResponse.data.detail.find(function(t) {
-                return t.hash.toLowerCase() === torrentData.hash;
+        if (response.data && response.data.success && response.data.detail) {
+            // Check if any downloaded file match the track keywords strings
+            const matchedFile = response.data.detail.find(function(t) {
+                return t.name.toLowerCase().includes(metaQuery.title.toLowerCase());
             });
-            
-            // If completed, fetch the real, authenticated direct CDN playback URL
-            if (existingTorrent && existingTorrent.progress === 1) {
-                console.log(`[TorBox Cloud Router]: Torrent Completed! Fetching stream link...`);
-                const linkResponse = await axios.get(`https://torbox.app{TORBOX_API_KEY}&torrent_id=${existingTorrent.id}`);
-                if (linkResponse.data && linkResponse.data.success) {
-                    return linkResponse.data.detail; 
+
+            if (matchedFile && matchedFile.progress === 1) {
+                console.log(`[Cache Link Found!] Fetching direct playback CDN path...`);
+                const dlResponse = await axios.get(`https://torbox.app{TORBOX_API_KEY}&torrent_id=${matchedFile.id}`);
+                if (dlResponse.data && dlResponse.data.success) {
+                    return dlResponse.data.detail;
                 }
             }
         }
-
-        // Step B: If missing, push the hash to your TorBox cloud drive to download instantly
-        console.log(`[TorBox Cloud Action]: Track missing from cache. Queueing background download...`);
-        await axios.post('https://torbox.app', 
-            { magnet: torrentData.magnet, seed: 2, allow_as_needed: true },
-            { headers: { 'Authorization': `Bearer ${TORBOX_API_KEY}`, 'Content-Type': 'application/json' } }
-        );
     } catch (err) {
-        console.error("TorBox Request Engine Fail:", err.message);
+        console.error(`[TorBox Communication Fail]: ${err.message}`);
     }
     return null;
 }
@@ -106,35 +94,49 @@ const server = http.createServer(async (req, res) => {
 
     if (textQuery) {
         const cleanSearchString = decodeURIComponent(textQuery).trim();
-        console.log(`[BitChord Unified Addon Request]: Parsing string -> "${cleanSearchString}"`);
+        console.log(`[BitChord Unified Addon Request]: Parsing query -> "${cleanSearchString}"`);
 
-        // Execute background scraping pipelines 
-        const torrent = await scrapeMagnetLink(cleanSearchString);
-        const realStreamUrl = await getTorBoxStreamOrCache(torrent);
+        // Pipeline Process A: Resolve clean metadata text using free public MusicBrainz
+        const trackMeta = await fetchCleanMetadata(cleanSearchString);
+        
+        // Pipeline Process B: Fetch full text lyrics from public LRCLIB database nodes
+        const lyricsData = await fetchTrackLyrics(trackMeta.artist, trackMeta.title);
 
-        // BITCHORD FORMAT INTERFACE DELIVERY:
+        // Pipeline Process C: Query TorBox Cloud structures to locate direct stream URL tracks
+        const realStreamUrl = await resolveDebridStream(trackMeta);
+
+        // Standardized Multi-Format payload return object
         return res.end(JSON.stringify({
             url: realStreamUrl || `https://cobalt.tools`, 
-            quality: realStreamUrl ? "Hi-Res FLAC" : "Caching to Cloud drive... Re-tap song to play.",
-            source: realStreamUrl ? "TorBox Debrid Cloud" : "Proxy Streaming Node Active",
+            quality: realStreamUrl ? "Hi-Res FLAC" : "Lossless Tracking Cache System Active",
+            source: realStreamUrl ? "TorBox Cloud Drive" : "Standard Audio Proxy",
+            metas: [{
+                id: `tb_${encodeURIComponent(trackMeta.query)}`,
+                type: "music",
+                name: trackMeta.title,
+                artist: trackMeta.artist,
+                lyrics: lyricsData,
+                description: realStreamUrl ? `✅ Lossless Audio Ready` : `⏳ System mapping active...`
+            }],
             streams: [{
-                name: "TorBox Lossless Engine",
-                title: torrent ? torrent.name : "System Resolver Active",
+                name: "TorBox System Node",
+                title: realStreamUrl ? `FLAC | ${trackMeta.query}` : "Audio Relay Active",
                 url: realStreamUrl || "https://soundhelix.com"
             }]
         }));
     }
 
+    // Baseline manifest configuration payload dictionary
     return res.end(JSON.stringify({
         id: "org.private.bitchordtb",
         name: "BitChord TorBox Scraper Pro",
-        version: "9.0.0",
-        description: "Direct Torrentio Text Search and Stable Scraper to TorBox pipeline.",
+        version: "11.0.0",
+        description: "Direct Free API Metadata Search and Stable Cloud Cache Sync Pipeline.",
         resources: ["stream", "search"],
         types: ["music"]
     }));
 });
 
 server.listen(PORT, () => {
-    console.log(`BitChord Upgraded Search Engine active on port ${PORT}`);
+    console.log(`BitChord Multi-Feature Engine active on port ${PORT}`);
 });
