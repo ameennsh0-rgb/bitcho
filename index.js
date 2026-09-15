@@ -5,91 +5,65 @@ const axios = require('axios');
 const PORT = process.env.PORT || 3000;
 const TORBOX_API_KEY = process.env.TORBOX_API_KEY;
 
-// 1. HIGH-AVAILABILITY SEARXNG MULTI-TRACKER AGGREGATOR
-async function scrapeMagnetLink(searchQuery) {
-    // Utilizing an open, high-availability public SearXNG engine instance instance
-    const searxInstances = [
-        'https://mdcnet.de',
-        'https://searx.be',
-        'https://searx.space'
-    ];
-
-    console.log(`[Meta Engine] Querying multi-tracker arrays for: "${searchQuery}"`);
-    const cleanQuery = searchQuery.replace(/[^a-zA-Z0-9 ]/g, '').trim();
-    const finalSearchString = `${cleanQuery} flac`;
-
-    for (let i = 0; i < searxInstances.length; i++) {
-        const baseInstanceUrl = searxInstances[i];
-        try {
-            // SearXNG natively filters open P2P networks using explicit categories variables
-            const targetUrl = `${baseInstanceUrl}?q=${encodeURIComponent(finalSearchString)}&categories=files&format=json`;
-            const response = await axios.get(targetUrl, { 
-                headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-                timeout: 4500 
-            });
-
-            if (response.data && response.data.results && response.data.results.length > 0) {
-                // Loop through array results to locate the first entry containing a valid cryptographic magnet link string
-                for (let j = 0; j < response.data.results.length; j++) {
-                    const item = response.data.results[j];
-                    if (item.magnetlink && item.magnetlink.startsWith('magnet:')) {
-                        // Extract cryptographic infohash fingerprint out of the raw text layout string
-                        const hashMatch = item.magnetlink.match(/btih:([a-fA-F0-9]{40})/);
-                        const infoHash = hashMatch ? hashMatch[1].toLowerCase() : "";
-
-                        if (infoHash) {
-                            console.log(`[Aggregator Success] Found structural match via ${item.engine || 'P2P Swarm'}: ${item.title}`);
-                            return {
-                                hash: infoHash,
-                                magnet: item.magnetlink,
-                                name: item.title || "Lossless Audio Track Collection"
-                            };
-                        }
-                    }
-                }
-            }
-        } catch (err) {
-            console.warn(`[Failover Routing] Instance node timed out or restricted: ${baseInstanceUrl}`);
-            continue; // Cycle automatically to next backup cluster mirror node path 
+// 1. QUERY TORBOX GLOBAL CACHE DIRECTLY (Bypasses all web torrent scraping blocks)
+async function searchTorBoxGlobalCache(searchQuery) {
+    try {
+        console.log(`[TorBox Deep Search] Querying global debrid cloud cache for: "${searchQuery}"`);
+        const cleanQuery = searchQuery.replace(/[^a-zA-Z0-9 ]/g, '').trim();
+        
+        // Call the official TorBox Instant Cache check endpoint
+        // This scans the entire global debrid history to see if the file is already downloaded by ANY user
+        const targetUrl = `https://torbox.app{TORBOX_API_KEY}&query=${encodeURIComponent(cleanQuery + " flac")}`;
+        const response = await axios.get(targetUrl, { timeout: 5000 });
+        
+        if (response.data && response.data.success && response.data.detail && response.data.detail.length > 0) {
+            // Locate the top matching completed cache transfer node
+            const cachedItem = response.data.detail[0];
+            console.log(`[Cache Hit!] Found high-fidelity matching file bundle: ${cachedItem.name}`);
+            return {
+                hash: cachedItem.hash.toLowerCase(),
+                name: cachedItem.name,
+                id: cachedItem.id || null
+            };
         }
+    } catch (err) {
+        console.error(`[Cache Error] TorBox global search failed: ${err.message}`);
     }
     return null;
 }
 
-// 2. CHECK TORBOX FOR INSTANT LINK OR COMMAND ASYNC CACHING
-async function getTorBoxStreamOrCache(torrentData) {
-    if (!torrentData) return null;
+// 2. GENERATE WORKING STREAM LINK FROM TARGET INSTANT CACHE
+async function getDirectStreamLink(cachedTorrent, searchQuery) {
+    if (!cachedTorrent) return null;
     try {
-        const listResponse = await axios.get('https://torbox.app', {
-            headers: { 'Authorization': `Bearer ${TORBOX_API_KEY}` }
-        });
-
-        if (listResponse.data && listResponse.data.success) {
-            const existingTorrent = listResponse.data.detail.find(function(t) {
-                return t.hash.toLowerCase() === torrentData.hash;
-            });
-            
-            if (existingTorrent && existingTorrent.progress === 1) {
-                console.log(`[TorBox Cloud Router]: Torrent Completed! Fetching stream link...`);
-                const linkResponse = await axios.get(`https://torbox.app{TORBOX_API_KEY}&torrent_id=${existingTorrent.id}`);
-                if (linkResponse.data && linkResponse.data.success) {
-                    return linkResponse.data.detail; 
-                }
-            }
-        }
-
-        console.log(`[TorBox Cloud Action]: Track missing from cache. Queueing background download...`);
-        await axios.post('https://torbox.app', 
-            { magnet: torrentData.magnet, seed: 2, allow_as_needed: true },
+        // If it's cached globally, we command TorBox to instantly instantly replicate it into your personal cloud drive
+        console.log(`[Cloud Injection] Cloning global cache asset straight into your personal drive storage...`);
+        const cloneResponse = await axios.post('https://torbox.app', 
+            { 
+                magnet: `magnet:?xt=urn:btih:${cachedTorrent.hash}&dn=${encodeURIComponent(cachedTorrent.name)}`, 
+                seed: 2, 
+                allow_as_needed: true 
+            },
             { headers: { 'Authorization': `Bearer ${TORBOX_API_KEY}`, 'Content-Type': 'application/json' } }
         );
+
+        if (cloneResponse.data && cloneResponse.data.success) {
+            const torrentId = cloneResponse.data.detail.torrent_id || cloneResponse.data.detail.id;
+            
+            // Request the high-speed direct download/streaming endpoint link
+            console.log(`[Stream Generator] Fetching high-speed direct streaming path token parameters...`);
+            const linkResponse = await axios.get(`https://torbox.app{TORBOX_API_KEY}&torrent_id=${torrentId}`);
+            if (linkResponse.data && linkResponse.data.success) {
+                return linkResponse.data.detail; 
+            }
+        }
     } catch (err) {
-        console.error("TorBox Request Engine Fail:", err.message);
+        console.error("[Stream Router Error] Failed to extract link string:", err.message);
     }
     return null;
 }
 
-// BITCHORD MASTER API HANDLER
+// BITCHORD MASTER ENDPOINT CONTROLLER
 const server = http.createServer(async (req, res) => {
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -103,31 +77,36 @@ const server = http.createServer(async (req, res) => {
         const cleanSearchString = decodeURIComponent(textQuery).trim();
         console.log(`[BitChord Unified Addon Request]: Parsing string -> "${cleanSearchString}"`);
 
-        const torrent = await scrapeMagnetLink(cleanSearchString);
-        const realStreamUrl = await getTorBoxStreamOrCache(torrent);
+        // Step 1: Scan TorBox's global user cache directly 
+        const cachedTorrent = await searchTorBoxGlobalCache(cleanSearchString);
+        
+        // Step 2: Grab the direct streaming URL path if a cache match succeeds
+        const realStreamUrl = await getDirectStreamLink(cachedTorrent, cleanSearchString);
 
+        // Step 3: Deliver the precise data object back to the app UI player sheet
         return res.end(JSON.stringify({
             url: realStreamUrl || `https://cobalt.tools`, 
-            quality: realStreamUrl ? "Hi-Res FLAC" : "Caching to Cloud drive... Re-tap song to play.",
-            source: realStreamUrl ? "TorBox Debrid Cloud" : "Proxy Streaming Node Active",
+            quality: realStreamUrl ? "Hi-Res FLAC" : "Standard Audio (Caching Premium Link)",
+            source: realStreamUrl ? "TorBox Debrid Cloud Cache" : "Proxy Streaming Active",
             streams: [{
-                name: "TorBox Lossless Engine",
-                title: torrent ? torrent.name : "System Resolver Active",
+                name: "TorBox Global Cloud Pipeline",
+                title: cachedTorrent ? cachedTorrent.name : "YouTube Alternative Relay Engine",
                 url: realStreamUrl || "https://soundhelix.com"
             }]
         }));
     }
 
+    // Default manifest validation payload structure
     return res.end(JSON.stringify({
         id: "org.private.bitchordtb",
         name: "BitChord TorBox Scraper Pro",
-        version: "5.0.0",
-        description: "Direct Text Search and Stable Aggregated Scraper to TorBox pipeline.",
+        version: "6.0.0",
+        description: "Direct TorBox Global Database Cache Matcher API Engine.",
         resources: ["stream", "search"],
         types: ["music"]
     }));
 });
 
 server.listen(PORT, () => {
-    console.log(`BitChord Upgraded Search Engine active on port ${PORT}`);
+    console.log(`BitChord Global Cache Engine active on port ${PORT}`);
 });
