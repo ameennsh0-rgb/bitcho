@@ -6,7 +6,8 @@ const TORBOX_API_KEY = process.env.TORBOX_API_KEY;
 
 async function scrapeMagnetLink(searchQuery) {
     try {
-        console.log(`[BitChord Intercept] Searching Torrents for: ${searchQuery}`);
+        console.log(`[BitChord Intercept Search]: ${searchQuery}`);
+        // Appending 'flac' to force BitChord to latch onto lossless tracks
         const encodedQuery = encodeURIComponent(searchQuery + " flac"); 
         const response = await axios.get(`https://apibay.org{encodedQuery}`, { timeout: 4500 });
         
@@ -45,46 +46,62 @@ const server = http.createServer(async (req, res) => {
 
     const urlObj = new URL(req.url, `http://${req.headers.host}`);
 
-    // STREMIO MANIFEST (BitChord calls this first to read the addon specs)
+    // 1. MANIFEST - Telling BitChord we support the "search" catalog resource
     if (urlObj.pathname === '/manifest.json') {
         return res.end(JSON.stringify({
             id: "org.private.bitchordtb",
             name: "BitChord TorBox Scraper",
-            version: "1.0.0",
-            description: "Direct Torrent Scraper to TorBox pipeline for BitChord.",
-            resources: ["stream"],
-            types: ["music", "movie", "series"], // Catching multiple meta types
-            idPrefixes: ["yt_", "tt_"] // Matches YouTube IDs or track prefixes
+            version: "1.5.0",
+            description: "Direct Torrent Scraper to TorBox pipeline.",
+            resources: ["catalog", "stream"], // Added catalog permission
+            types: ["music"],
+            catalogs: [
+                {
+                    type: "music",
+                    id: "tb_music_search",
+                    name: "TorBox Search",
+                    extra: [{ name: "search", required: true }] // Tells BitChord it handles search parameters
+                }
+            ],
+            idPrefixes: ["yt_", "tb_"]
         }));
     }
 
-    // THE FIX: BitChord handles stream requests using the Stremio protocol format: /stream/{type}/{id}.json
-    if (urlObj.pathname.startsWith('/stream/')) {
-        const pathSegments = urlObj.pathname.split('/');
-        // Extract the song id or search string from the path
-        const rawTrackId = pathSegments[pathSegments.length - 1].replace('.json', '');
+    // 2. THE FIX: Catching BitChord's catalog search request
+    if (urlObj.pathname.startsWith('/catalog/music/tb_music_search')) {
+        // Extract search query string passed like /catalog/music/tb_music_search/search=Artist%20Track.json
+        const cleanQueryPath = decodeURIComponent(urlObj.pathname);
+        const searchMatch = cleanQueryPath.match(/search=([^/.]+)/);
         
-        // Decode and clean up track names passed by the client framework
-        const cleanTrackName = decodeURIComponent(rawTrackId).replace('yt_', '').replace(/_/g, ' ');
-
-        // 1. Scrape the open trackers for a high-quality audio file
-        const torrent = await scrapeMagnetLink(cleanTrackName);
-        if (!torrent) {
-            // Return empty streams array so BitChord transparently falls back to regular YouTube audio
-            return res.end(JSON.stringify({ streams: [] }));
+        if (!searchMatch) {
+            return res.end(JSON.stringify({ metas: [] }));
         }
 
-        // 2. Trigger the download automatically to your TorBox cloud drive
-        await cacheToTorBox(torrent.magnet);
-        
-        // 3. Return an instruction payload back to the client app
+        const cleanTrackName = searchMatch[1].replace(/_/g, ' ');
+
+        // Trigger background search and debrid upload pipeline
+        const torrent = await scrapeMagnetLink(cleanTrackName);
+        if (torrent) {
+            await cacheToTorBox(torrent.magnet);
+        }
+
+        // Return a mock Stremio catalog item so BitChord marks the layout query as successful
         return res.end(JSON.stringify({
-            streams: [
+            metas: [
                 {
-                    title: `☁️ TorBox Caching: ${torrent.name}`,
-                    url: "https://torbox.app" // Keeps BitChord satisfied while the cache builds
+                    id: `tb_${encodeURIComponent(cleanTrackName)}`,
+                    type: "music",
+                    name: torrent ? `☁️ Pushed to TorBox: ${torrent.name}` : `Searching...`,
+                    poster: ""
                 }
             ]
+        }));
+    }
+
+    // 3. Fallback streaming block router
+    if (urlObj.pathname.startsWith('/stream/')) {
+        return res.end(JSON.stringify({
+            streams: [{ title: "TorBox Stream Node Cache Active", url: "https://torbox.app" }]
         }));
     }
 
@@ -93,5 +110,5 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-    console.log(`BitChord Backend Scraper running on port ${PORT}`);
+    console.log(`BitChord Addon Server resolving search catalogs on port ${PORT}`);
 });
