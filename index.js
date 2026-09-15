@@ -5,34 +5,7 @@ const axios = require('axios');
 const PORT = process.env.PORT || 3000;
 const TORBOX_API_KEY = process.env.TORBOX_API_KEY;
 
-const APP_MANIFEST_PAYLOAD = {
-    id: "org.private.bitchordtb",
-    name: "BitChord TorBox Scraper Pro",
-    version: "3.5.0",
-    description: "Real-time streaming pipeline supporting async TorBox caching.",
-    resources: ["stream"],
-    types: ["music"],
-    idPrefixes: ["yt_"]
-};
-
-// 1. EXTRACT TRACK DATA FROM YOUTUBE ID
-async function fetchTrackNameFromYT(ytId) {
-    try {
-        const response = await axios.get(`https://youtube.com{ytId}&format=json`, { timeout: 3000 });
-        if (response.data && response.data.title) {
-            return response.data.title
-                .replace(/\(Official.*?\)/gi, '')
-                .replace(/\[Official.*?\]/gi, '')
-                .replace(/Lyrics/gi, '')
-                .trim();
-        }
-    } catch (err) {
-        console.error("[Metadata Error]:", err.message);
-    }
-    return null;
-}
-
-// 2. SCRAPE ACTIVE PUBLIC MIRRORS
+// 1. STABLE MIRROR SCRAPER FOR HIGH-FIDELITY TRACKS
 async function scrapeMagnetLink(searchQuery) {
     const mirrorEndpoints = [
         'https://tpb.party',
@@ -40,16 +13,20 @@ async function scrapeMagnetLink(searchQuery) {
         'https://thepiratebay0.org'
     ];
 
+    console.log(`[Scraper Engine] Searching active mirrors for: "${searchQuery}"`);
     const encodedQuery = encodeURIComponent(searchQuery + " flac"); 
+
     for (let i = 0; i < mirrorEndpoints.length; i++) {
         const baseApi = mirrorEndpoints[i];
         try {
             const response = await axios.get(`${baseApi}${encodedQuery}`, { timeout: 4000 });
+            
             if (response.data && response.data.length > 0) {
                 const results = Array.isArray(response.data) ? response.data : [response.data];
-                const topTorrent = results[0];
+                const topTorrent = results[0]; // Isolate top seeded result array item
                 
                 if (topTorrent && topTorrent.info_hash && topTorrent.info_hash !== "0") {
+                    console.log(`[Scraper Success] Found target match: ${topTorrent.name}`);
                     return {
                         hash: topTorrent.info_hash.toLowerCase(),
                         magnet: `magnet:?xt=urn:btih:${topTorrent.info_hash}&dn=${encodeURIComponent(topTorrent.name)}`,
@@ -58,13 +35,14 @@ async function scrapeMagnetLink(searchQuery) {
                 }
             }
         } catch (err) {
+            console.warn(`[Mirror Failover] Node timed out or offline: ${baseApi}`);
             continue; 
         }
     }
     return null;
 }
 
-// 3. RETRIEVE CACHED LINK OR QUEUE TORBOX IN BACKGROUND
+// 2. CHECK TORBOX FOR INSTANT LINK OR COMMAND ASYNC CACHING
 async function getTorBoxStreamOrCache(torrentData) {
     if (!torrentData) return null;
     try {
@@ -73,10 +51,12 @@ async function getTorBoxStreamOrCache(torrentData) {
         });
 
         if (listResponse.data && listResponse.data.success) {
-            const existingTorrent = listResponse.data.detail.find(t => t.hash.toLowerCase() === torrentData.hash);
+            const existingTorrent = listResponse.data.detail.find(function(t) {
+                return t.hash.toLowerCase() === torrentData.hash;
+            });
             
             if (existingTorrent && existingTorrent.progress === 1) {
-                console.log(`[TorBox Cloud Router]: Torrent Cached! Requesting link...`);
+                console.log(`[TorBox Cloud Router]: Torrent Completed! Fetching stream link...`);
                 const linkResponse = await axios.get(`https://torbox.app{TORBOX_API_KEY}&torrent_id=${existingTorrent.id}`);
                 if (linkResponse.data && linkResponse.data.success) {
                     return linkResponse.data.detail; 
@@ -84,18 +64,18 @@ async function getTorBoxStreamOrCache(torrentData) {
             }
         }
 
-        console.log(`[TorBox Action]: Triggering background cache task for: ${torrentData.name}`);
+        console.log(`[TorBox Cloud Action]: Track missing from cache. Queueing background download...`);
         await axios.post('https://torbox.app', 
             { magnet: torrentData.magnet, seed: 2, allow_as_needed: true },
             { headers: { 'Authorization': `Bearer ${TORBOX_API_KEY}`, 'Content-Type': 'application/json' } }
         );
     } catch (err) {
-        console.error("[TorBox Engine Fail]:", err.message);
+        console.error("TorBox Request Engine Fail:", err.message);
     }
     return null;
 }
 
-// BITCHORD DIRECT ACCESS ROUTER
+// BITCHORD MASTER API HANDLER
 const server = http.createServer(async (req, res) => {
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -103,38 +83,43 @@ const server = http.createServer(async (req, res) => {
     res.setHeader('Access-Control-Allow-Methods', '*');
 
     const urlObj = new URL(req.url, `http://${req.headers.host}`);
-    const ytId = urlObj.searchParams.get('id') || urlObj.searchParams.get('video_id');
+    
+    // Extract query text parameters strings directly matching BitChord's payload format structures
+    const textQuery = urlObj.searchParams.get('q') || urlObj.searchParams.get('search');
 
-    if (ytId) {
-        const cleanTrackName = await fetchTrackNameFromYT(ytId);
-        if (!cleanTrackName) {
-            return res.end(JSON.stringify({ url: `https://cobalt.tools{ytId}` }));
-        }
+    if (textQuery) {
+        const cleanSearchString = decodeURIComponent(textQuery).trim();
+        console.log(`[BitChord Unified Addon Request]: Parsing string -> "${cleanSearchString}"`);
 
-        const torrent = await scrapeMagnetLink(cleanTrackName);
+        // Execute background scraping pipelines 
+        const torrent = await scrapeMagnetLink(cleanSearchString);
         const realStreamUrl = await getTorBoxStreamOrCache(torrent);
 
-        // THE DEFINITIVE FIX: Deliver a functional, high-speed audio stream link parameters instantly
-        // If the FLAC torrent isn't cached yet, we route the audio via Cobalt open media parsing utility streams
-        const finalAudioStreamUrl = realStreamUrl || `https://cobalt.tools{ytId}`;
-
-        console.log(`[Delivery] Serving playback stream node url path -> ${finalAudioStreamUrl}`);
-
+        // BITCHORD EXTENSION INTERFACE OBJECT FORMAT:
+        // Returns immediate high-speed audio resolution parameters back to the system media controllers
         return res.end(JSON.stringify({
-            url: finalAudioStreamUrl,
-            quality: realStreamUrl ? "Hi-Res FLAC" : "Standard Audio (Caching FLAC)",
-            source: realStreamUrl ? "TorBox Debrid" : "YouTube Proxy",
+            url: realStreamUrl || `https://cobalt.tools`, // Fallback stream node paths
+            quality: realStreamUrl ? "Hi-Res FLAC" : "Caching to Cloud drive... Re-tap song to play.",
+            source: realStreamUrl ? "TorBox Debrid Cloud" : "Proxy Streaming Node Active",
             streams: [{
-                name: "TorBox Premium Pipeline",
-                title: torrent ? torrent.name : "System Resolver",
-                url: finalAudioStreamUrl
+                name: "TorBox Lossless Engine",
+                title: torrent ? torrent.name : "System Resolver Active",
+                url: realStreamUrl || "https://soundhelix.com"
             }]
         }));
     }
 
-    return res.end(JSON.stringify(APP_MANIFEST_PAYLOAD));
+    // Default manifest placeholder validation layout
+    return res.end(JSON.stringify({
+        id: "org.private.bitchordtb",
+        name: "BitChord TorBox Scraper Pro",
+        version: "3.6.0",
+        description: "Direct Text Search and Torrent Scraper to TorBox pipeline.",
+        resources: ["stream", "search"],
+        types: ["music"]
+    }));
 });
 
 server.listen(PORT, () => {
-    console.log(`BitChord Multi-Feature Engine active on port ${PORT}`);
+    console.log(`BitChord Universal Search Engine listening active on port ${PORT}`);
 });
