@@ -5,26 +5,28 @@ const axios = require('axios');
 const PORT = process.env.PORT || 3000;
 const TORBOX_API_KEY = process.env.TORBOX_API_KEY;
 
-// 1. ULTRA-STABLE PUBLIC TORRENT SCRAPER (Uses TorrentProject API instead of broken TPB mirrors)
+// 1. HIGH-AVAILABILITY DECENTRALIZED DHT CRAWLER SCRAPER (Replaces unstable web trackers)
 async function scrapeMagnetLink(searchQuery) {
     try {
-        console.log(`[Scraper Engine] Initiating high-stability search for: "${searchQuery}"`);
-        const cleanQuery = searchQuery.replace(/[^a-zA-Z0-9 ]/g, ''); // Clear special characters
+        console.log(`[DHT Engine] Querying live file swarms for: "${searchQuery}"`);
+        const cleanQuery = searchQuery.replace(/[^a-zA-Z0-9 ]/g, '').trim();
         const encodedQuery = encodeURIComponent(cleanQuery + " flac"); 
         
-        // Query TorrentProject API (Very reliable, fast response times, no Cloudflare block)
-        const targetUrl = `https://torrentproject2.se{encodedQuery}`;
-        const response = await axios.get(targetUrl, { timeout: 5000 });
+        // Utilizing a high-speed, open-access DHT aggregator API node
+        const targetUrl = `https://bt4g.org{encodedQuery}&sort=seeders`;
+        const response = await axios.get(targetUrl, { 
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+            timeout: 5000 
+        });
         
-        // TorrentProject returns an object with a total result count and dynamic numeric keys for hits
-        if (response.data && response.data.total_found > 0) {
-            // Pick the first result item (index "0")
-            const topTorrent = response.data["0"];
-            if (topTorrent && topTorrent.torrent_hash) {
-                const infoHash = topTorrent.torrent_hash.toLowerCase();
-                const torrentName = topTorrent.title;
+        if (response.data && response.data.results && response.data.results.length > 0) {
+            // Target the most highly-seeded file package in the decentralized swarm layout
+            const topTorrent = response.data.results[0];
+            if (topTorrent && topTorrent.infohash) {
+                const infoHash = topTorrent.infohash.toLowerCase().trim();
+                const torrentName = topTorrent.name || "Lossless Audio Track Collection";
                 
-                console.log(`[Scraper Success] Found target match: ${torrentName}`);
+                console.log(`[Scraper Success] Intercepted valid DHT match: ${torrentName}`);
                 return {
                     hash: infoHash,
                     magnet: `magnet:?xt=urn:btih:${infoHash}&dn=${encodeURIComponent(torrentName)}`,
@@ -33,7 +35,23 @@ async function scrapeMagnetLink(searchQuery) {
             }
         }
     } catch (err) {
-        console.error(`[Scraper Error] Main API dropped connection: ${err.message}`);
+        console.error(`[Scraper Fallback] Main search thread dropped. Attempting backup proxy layout...`);
+        
+        // Backup Plan: Try parsing a secondary public search API mirror if the primary DHT index experiences issues
+        try {
+            const backupUrl = `https://apibay.org{encodeURIComponent(searchQuery + " flac")}`;
+            const backupRes = await axios.get(backupUrl, { timeout: 4000 });
+            if (backupRes.data && backupRes.data.length > 0 && backupRes.data[0].info_hash !== "0") {
+                const topBackup = backupRes.data[0];
+                return {
+                    hash: topBackup.info_hash.toLowerCase(),
+                    magnet: `magnet:?xt=urn:btih:${topBackup.info_hash}&dn=${encodeURIComponent(topBackup.name)}`,
+                    name: topBackup.name
+                };
+            }
+        } catch (backupErr) {
+            console.error(`[Scraper Error] All indexing parameters exhausted: ${backupErr.message}`);
+        }
     }
     return null;
 }
@@ -79,19 +97,15 @@ const server = http.createServer(async (req, res) => {
     res.setHeader('Access-Control-Allow-Methods', '*');
 
     const urlObj = new URL(req.url, `http://${req.headers.host}`);
-    
-    // Extract query text parameters matching BitChord format structures
     const textQuery = urlObj.searchParams.get('q') || urlObj.searchParams.get('search');
 
     if (textQuery) {
         const cleanSearchString = decodeURIComponent(textQuery).trim();
         console.log(`[BitChord Unified Addon Request]: Parsing string -> "${cleanSearchString}"`);
 
-        // Execute background scraping pipelines 
         const torrent = await scrapeMagnetLink(cleanSearchString);
         const realStreamUrl = await getTorBoxStreamOrCache(torrent);
 
-        // BITCHORD SYSTEM INTERFACE OBJECT FORMAT:
         return res.end(JSON.stringify({
             url: realStreamUrl || `https://cobalt.tools`, 
             quality: realStreamUrl ? "Hi-Res FLAC" : "Caching to Cloud drive... Re-tap song to play.",
@@ -104,11 +118,10 @@ const server = http.createServer(async (req, res) => {
         }));
     }
 
-    // Default manifest placeholder validation layout
     return res.end(JSON.stringify({
         id: "org.private.bitchordtb",
         name: "BitChord TorBox Scraper Pro",
-        version: "4.0.0",
+        version: "4.1.0",
         description: "Direct Text Search and Stable Torrent Scraper to TorBox pipeline.",
         resources: ["stream", "search"],
         types: ["music"]
