@@ -1,0 +1,12 @@
+{
+  "name": "torbox-private-music-scraper",
+  "version": "1.0.0",
+  "description": "Custom private music scraper for TorBox without BitChord tracking",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.0"
+  }
+}
