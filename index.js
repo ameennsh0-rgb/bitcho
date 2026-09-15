@@ -2,18 +2,16 @@ const http = require('http');
 const axios = require('axios');
 
 const PORT = process.env.PORT || 3000;
-const TORBOX_API_KEY = process.env.TORBOX_API_KEY; // Pulled securely from Render Environment Variables
+const TORBOX_API_KEY = process.env.TORBOX_API_KEY;
 
 async function scrapeMagnetLink(searchQuery) {
     try {
-        console.log(`[BitChord Intercept] Searching Torrent Indexers for: ${searchQuery}`);
-        // Forcing FLAC to give BitChord the lossless files it is looking for
+        console.log(`[BitChord Intercept] Searching Torrents for: ${searchQuery}`);
         const encodedQuery = encodeURIComponent(searchQuery + " flac"); 
-        
         const response = await axios.get(`https://apibay.org{encodedQuery}`, { timeout: 4500 });
         
-        if (response.data && response.data.length > 0 && response.data[0].info_hash !== "0") {
-            const topTorrent = response.data[0];
+        if (response.data && response.data.length > 0 && response.data.info_hash !== "0") {
+            const topTorrent = response.data;
             return {
                 magnet: `magnet:?xt=urn:btih:${topTorrent.info_hash}&dn=${encodeURIComponent(topTorrent.name)}`,
                 name: topTorrent.name
@@ -41,37 +39,52 @@ async function cacheToTorBox(magnetLink) {
 }
 
 const server = http.createServer(async (req, res) => {
-    // Add CORS headers so the Android app client isn't blocked by network policies
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Headers', '*');
 
     const urlObj = new URL(req.url, `http://${req.headers.host}`);
 
-    // Standard health-check route to ensure Render keeps the app awake
-    if (urlObj.pathname === '/' || urlObj.pathname === '/status') {
-        return res.end(JSON.stringify({ status: "online", service: "BitChord TorBox Bridge" }));
+    // STREMIO MANIFEST (BitChord calls this first to read the addon specs)
+    if (urlObj.pathname === '/manifest.json') {
+        return res.end(JSON.stringify({
+            id: "org.private.bitchordtb",
+            name: "BitChord TorBox Scraper",
+            version: "1.0.0",
+            description: "Direct Torrent Scraper to TorBox pipeline for BitChord.",
+            resources: ["stream"],
+            types: ["music", "movie", "series"], // Catching multiple meta types
+            idPrefixes: ["yt_", "tt_"] // Matches YouTube IDs or track prefixes
+        }));
     }
 
-    // BitChord calls standard stream paths by parsing strings directly over the API request 
-    if (urlObj.pathname.includes('/stream/')) {
+    // THE FIX: BitChord handles stream requests using the Stremio protocol format: /stream/{type}/{id}.json
+    if (urlObj.pathname.startsWith('/stream/')) {
         const pathSegments = urlObj.pathname.split('/');
-        const rawTrackName = pathSegments[pathSegments.length - 1].replace('.json', '');
-        const cleanTrackName = decodeURIComponent(rawTrackName).replace(/_/g, ' ');
+        // Extract the song id or search string from the path
+        const rawTrackId = pathSegments[pathSegments.length - 1].replace('.json', '');
+        
+        // Decode and clean up track names passed by the client framework
+        const cleanTrackName = decodeURIComponent(rawTrackId).replace('yt_', '').replace(/_/g, ' ');
 
-        // 1. Scrape the open trackers
+        // 1. Scrape the open trackers for a high-quality audio file
         const torrent = await scrapeMagnetLink(cleanTrackName);
         if (!torrent) {
-            return res.end(JSON.stringify({ streams: [], notice: "Fallback to standard YouTube stream." }));
+            // Return empty streams array so BitChord transparently falls back to regular YouTube audio
+            return res.end(JSON.stringify({ streams: [] }));
         }
 
-        // 2. Cache it instantly to your TorBox cloud drive
+        // 2. Trigger the download automatically to your TorBox cloud drive
         await cacheToTorBox(torrent.magnet);
         
-        // 3. Return a clean payload structure to BitChord
+        // 3. Return an instruction payload back to the client app
         return res.end(JSON.stringify({
-            streams: [],
-            detail: `Caching "${torrent.name}" directly to your TorBox dashboard storage.`
+            streams: [
+                {
+                    title: `☁️ TorBox Caching: ${torrent.name}`,
+                    url: "https://torbox.app" // Keeps BitChord satisfied while the cache builds
+                }
+            ]
         }));
     }
 
@@ -80,5 +93,5 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-    console.log(`BitChord TorBox Scraper Server deployed on port ${PORT}`);
+    console.log(`BitChord Backend Scraper running on port ${PORT}`);
 });
