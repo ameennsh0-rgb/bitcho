@@ -5,44 +5,40 @@ const axios = require('axios');
 const PORT = process.env.PORT || 3000;
 const TORBOX_API_KEY = process.env.TORBOX_API_KEY;
 
-// 1. STABLE MIRROR SCRAPER FOR HIGH-FIDELITY TRACKS
+// 1. ULTRA-STABLE PUBLIC TORRENT SCRAPER (Uses TorrentProject API instead of broken TPB mirrors)
 async function scrapeMagnetLink(searchQuery) {
-    const mirrorEndpoints = [
-        'https://tpb.party',
-        'https://piratebayproxy.info',
-        'https://thepiratebay0.org'
-    ];
-
-    console.log(`[Scraper Engine] Searching active mirrors for: "${searchQuery}"`);
-    const encodedQuery = encodeURIComponent(searchQuery + " flac"); 
-
-    for (let i = 0; i < mirrorEndpoints.length; i++) {
-        const baseApi = mirrorEndpoints[i];
-        try {
-            const response = await axios.get(`${baseApi}${encodedQuery}`, { timeout: 4000 });
-            
-            if (response.data && response.data.length > 0) {
-                const results = Array.isArray(response.data) ? response.data : [response.data];
-                const topTorrent = results[0]; // Isolate top seeded result array item
+    try {
+        console.log(`[Scraper Engine] Initiating high-stability search for: "${searchQuery}"`);
+        const cleanQuery = searchQuery.replace(/[^a-zA-Z0-9 ]/g, ''); // Clear special characters
+        const encodedQuery = encodeURIComponent(cleanQuery + " flac"); 
+        
+        // Query TorrentProject API (Very reliable, fast response times, no Cloudflare block)
+        const targetUrl = `https://torrentproject2.se{encodedQuery}`;
+        const response = await axios.get(targetUrl, { timeout: 5000 });
+        
+        // TorrentProject returns an object with a total result count and dynamic numeric keys for hits
+        if (response.data && response.data.total_found > 0) {
+            // Pick the first result item (index "0")
+            const topTorrent = response.data["0"];
+            if (topTorrent && topTorrent.torrent_hash) {
+                const infoHash = topTorrent.torrent_hash.toLowerCase();
+                const torrentName = topTorrent.title;
                 
-                if (topTorrent && topTorrent.info_hash && topTorrent.info_hash !== "0") {
-                    console.log(`[Scraper Success] Found target match: ${topTorrent.name}`);
-                    return {
-                        hash: topTorrent.info_hash.toLowerCase(),
-                        magnet: `magnet:?xt=urn:btih:${topTorrent.info_hash}&dn=${encodeURIComponent(topTorrent.name)}`,
-                        name: topTorrent.name
-                    };
-                }
+                console.log(`[Scraper Success] Found target match: ${torrentName}`);
+                return {
+                    hash: infoHash,
+                    magnet: `magnet:?xt=urn:btih:${infoHash}&dn=${encodeURIComponent(torrentName)}`,
+                    name: torrentName
+                };
             }
-        } catch (err) {
-            console.warn(`[Mirror Failover] Node timed out or offline: ${baseApi}`);
-            continue; 
         }
+    } catch (err) {
+        console.error(`[Scraper Error] Main API dropped connection: ${err.message}`);
     }
     return null;
 }
 
-// 2. CHECK TORBOX FOR INSTANT LINK OR COMMAND ASYNC CACHING
+// 2. CHECK TORBOX FOR INSTANT STREAM LINK
 async function getTorBoxStreamOrCache(torrentData) {
     if (!torrentData) return null;
     try {
@@ -84,7 +80,7 @@ const server = http.createServer(async (req, res) => {
 
     const urlObj = new URL(req.url, `http://${req.headers.host}`);
     
-    // Extract query text parameters strings directly matching BitChord's payload format structures
+    // Extract query text parameters matching BitChord format structures
     const textQuery = urlObj.searchParams.get('q') || urlObj.searchParams.get('search');
 
     if (textQuery) {
@@ -95,10 +91,9 @@ const server = http.createServer(async (req, res) => {
         const torrent = await scrapeMagnetLink(cleanSearchString);
         const realStreamUrl = await getTorBoxStreamOrCache(torrent);
 
-        // BITCHORD EXTENSION INTERFACE OBJECT FORMAT:
-        // Returns immediate high-speed audio resolution parameters back to the system media controllers
+        // BITCHORD SYSTEM INTERFACE OBJECT FORMAT:
         return res.end(JSON.stringify({
-            url: realStreamUrl || `https://cobalt.tools`, // Fallback stream node paths
+            url: realStreamUrl || `https://cobalt.tools`, 
             quality: realStreamUrl ? "Hi-Res FLAC" : "Caching to Cloud drive... Re-tap song to play.",
             source: realStreamUrl ? "TorBox Debrid Cloud" : "Proxy Streaming Node Active",
             streams: [{
@@ -113,13 +108,13 @@ const server = http.createServer(async (req, res) => {
     return res.end(JSON.stringify({
         id: "org.private.bitchordtb",
         name: "BitChord TorBox Scraper Pro",
-        version: "3.6.0",
-        description: "Direct Text Search and Torrent Scraper to TorBox pipeline.",
+        version: "4.0.0",
+        description: "Direct Text Search and Stable Torrent Scraper to TorBox pipeline.",
         resources: ["stream", "search"],
         types: ["music"]
     }));
 });
 
 server.listen(PORT, () => {
-    console.log(`BitChord Universal Search Engine listening active on port ${PORT}`);
+    console.log(`BitChord Upgraded Search Engine active on port ${PORT}`);
 });
