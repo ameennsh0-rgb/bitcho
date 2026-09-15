@@ -5,58 +5,58 @@ const axios = require('axios');
 const PORT = process.env.PORT || 3000;
 const TORBOX_API_KEY = process.env.TORBOX_API_KEY;
 
-// 1. HIGH-AVAILABILITY DECENTRALIZED DHT CRAWLER SCRAPER (Replaces unstable web trackers)
+// 1. HIGH-AVAILABILITY SEARXNG MULTI-TRACKER AGGREGATOR
 async function scrapeMagnetLink(searchQuery) {
-    try {
-        console.log(`[DHT Engine] Querying live file swarms for: "${searchQuery}"`);
-        const cleanQuery = searchQuery.replace(/[^a-zA-Z0-9 ]/g, '').trim();
-        const encodedQuery = encodeURIComponent(cleanQuery + " flac"); 
-        
-        // Utilizing a high-speed, open-access DHT aggregator API node
-        const targetUrl = `https://bt4g.org{encodedQuery}&sort=seeders`;
-        const response = await axios.get(targetUrl, { 
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-            timeout: 5000 
-        });
-        
-        if (response.data && response.data.results && response.data.results.length > 0) {
-            // Target the most highly-seeded file package in the decentralized swarm layout
-            const topTorrent = response.data.results[0];
-            if (topTorrent && topTorrent.infohash) {
-                const infoHash = topTorrent.infohash.toLowerCase().trim();
-                const torrentName = topTorrent.name || "Lossless Audio Track Collection";
-                
-                console.log(`[Scraper Success] Intercepted valid DHT match: ${torrentName}`);
-                return {
-                    hash: infoHash,
-                    magnet: `magnet:?xt=urn:btih:${infoHash}&dn=${encodeURIComponent(torrentName)}`,
-                    name: torrentName
-                };
-            }
-        }
-    } catch (err) {
-        console.error(`[Scraper Fallback] Main search thread dropped. Attempting backup proxy layout...`);
-        
-        // Backup Plan: Try parsing a secondary public search API mirror if the primary DHT index experiences issues
+    // Utilizing an open, high-availability public SearXNG engine instance instance
+    const searxInstances = [
+        'https://mdcnet.de',
+        'https://searx.be',
+        'https://searx.space'
+    ];
+
+    console.log(`[Meta Engine] Querying multi-tracker arrays for: "${searchQuery}"`);
+    const cleanQuery = searchQuery.replace(/[^a-zA-Z0-9 ]/g, '').trim();
+    const finalSearchString = `${cleanQuery} flac`;
+
+    for (let i = 0; i < searxInstances.length; i++) {
+        const baseInstanceUrl = searxInstances[i];
         try {
-            const backupUrl = `https://apibay.org{encodeURIComponent(searchQuery + " flac")}`;
-            const backupRes = await axios.get(backupUrl, { timeout: 4000 });
-            if (backupRes.data && backupRes.data.length > 0 && backupRes.data[0].info_hash !== "0") {
-                const topBackup = backupRes.data[0];
-                return {
-                    hash: topBackup.info_hash.toLowerCase(),
-                    magnet: `magnet:?xt=urn:btih:${topBackup.info_hash}&dn=${encodeURIComponent(topBackup.name)}`,
-                    name: topBackup.name
-                };
+            // SearXNG natively filters open P2P networks using explicit categories variables
+            const targetUrl = `${baseInstanceUrl}?q=${encodeURIComponent(finalSearchString)}&categories=files&format=json`;
+            const response = await axios.get(targetUrl, { 
+                headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+                timeout: 4500 
+            });
+
+            if (response.data && response.data.results && response.data.results.length > 0) {
+                // Loop through array results to locate the first entry containing a valid cryptographic magnet link string
+                for (let j = 0; j < response.data.results.length; j++) {
+                    const item = response.data.results[j];
+                    if (item.magnetlink && item.magnetlink.startsWith('magnet:')) {
+                        // Extract cryptographic infohash fingerprint out of the raw text layout string
+                        const hashMatch = item.magnetlink.match(/btih:([a-fA-F0-9]{40})/);
+                        const infoHash = hashMatch ? hashMatch[1].toLowerCase() : "";
+
+                        if (infoHash) {
+                            console.log(`[Aggregator Success] Found structural match via ${item.engine || 'P2P Swarm'}: ${item.title}`);
+                            return {
+                                hash: infoHash,
+                                magnet: item.magnetlink,
+                                name: item.title || "Lossless Audio Track Collection"
+                            };
+                        }
+                    }
+                }
             }
-        } catch (backupErr) {
-            console.error(`[Scraper Error] All indexing parameters exhausted: ${backupErr.message}`);
+        } catch (err) {
+            console.warn(`[Failover Routing] Instance node timed out or restricted: ${baseInstanceUrl}`);
+            continue; // Cycle automatically to next backup cluster mirror node path 
         }
     }
     return null;
 }
 
-// 2. CHECK TORBOX FOR INSTANT STREAM LINK
+// 2. CHECK TORBOX FOR INSTANT LINK OR COMMAND ASYNC CACHING
 async function getTorBoxStreamOrCache(torrentData) {
     if (!torrentData) return null;
     try {
@@ -121,8 +121,8 @@ const server = http.createServer(async (req, res) => {
     return res.end(JSON.stringify({
         id: "org.private.bitchordtb",
         name: "BitChord TorBox Scraper Pro",
-        version: "4.1.0",
-        description: "Direct Text Search and Stable Torrent Scraper to TorBox pipeline.",
+        version: "5.0.0",
+        description: "Direct Text Search and Stable Aggregated Scraper to TorBox pipeline.",
         resources: ["stream", "search"],
         types: ["music"]
     }));
